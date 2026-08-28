@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Action, ActionPanel, Icon, Keyboard, List, open } from "@raycast/api";
-import { useCachedPromise } from "@raycast/utils";
-import { getEvents, SparkCliError } from "./lib/spark";
+import { Action, ActionPanel, Alert, Icon, Keyboard, List, confirmAlert, open, showToast, Toast } from "@raycast/api";
+import { showFailureToast, useCachedPromise } from "@raycast/utils";
+import { deleteEvent, describeSparkError, getEvents, rsvpEvent, SparkCliError } from "./lib/spark";
+import EventForm from "./event-form";
 
 const SPARK_APP_PATH = "/Applications/Spark Desktop.app";
 
@@ -10,6 +11,40 @@ type Range = "today" | "tomorrow" | "week";
 export default function Events() {
   const [range, setRange] = useState<Range>("today");
   const { data, isLoading, error, revalidate } = useCachedPromise(async (r: Range) => getEvents(r), [range]);
+
+  async function rsvp(eventId: string, title: string, status: "accept" | "decline" | "maybe") {
+    const toast = await showToast({ style: Toast.Style.Animated, title: "Updating RSVP…" });
+    try {
+      await rsvpEvent(eventId, status);
+      toast.style = Toast.Style.Success;
+      toast.title = `RSVP'd ${status}`;
+      revalidate();
+    } catch (err) {
+      toast.hide();
+      await showFailureToast(err, { title: describeSparkError(err, `Couldn't RSVP to "${title}"`) });
+    }
+  }
+
+  async function removeEvent(eventId: string, title: string) {
+    const confirmed = await confirmAlert({
+      icon: Icon.Trash,
+      title: "Delete Event?",
+      message: `"${title}" will be removed from your calendar.`,
+      primaryAction: { title: "Delete", style: Alert.ActionStyle.Destructive },
+    });
+    if (!confirmed) return;
+
+    const toast = await showToast({ style: Toast.Style.Animated, title: "Deleting…" });
+    try {
+      await deleteEvent(eventId);
+      toast.style = Toast.Style.Success;
+      toast.title = "Deleted";
+      revalidate();
+    } catch (err) {
+      toast.hide();
+      await showFailureToast(err, { title: describeSparkError(err, `Couldn't delete "${title}"`) });
+    }
+  }
 
   if (error) {
     const isNotInstalled = error instanceof SparkCliError && error.kind === "not-installed";
@@ -42,7 +77,16 @@ export default function Events() {
       }
     >
       {data?.empty ? (
-        <List.EmptyView icon={Icon.Calendar} title="No Events" description="No calendar events in this range." />
+        <List.EmptyView
+          icon={Icon.Calendar}
+          title="No Events"
+          description="No calendar events in this range."
+          actions={
+            <ActionPanel>
+              <Action.Push title="Create Event…" icon={Icon.Plus} target={<EventForm />} />
+            </ActionPanel>
+          }
+        />
       ) : (
         data?.days.map((day) => (
           <List.Section key={day.heading} title={day.heading}>
@@ -55,14 +99,37 @@ export default function Events() {
                 accessories={event.calendar ? [{ text: event.calendar }] : undefined}
                 actions={
                   <ActionPanel>
-                    <Action.CopyToClipboard title="Copy Title" content={event.title} />
-                    {event.location && <Action.CopyToClipboard title="Copy Location" content={event.location} />}
-                    <Action
-                      title="Reload"
-                      icon={Icon.ArrowClockwise}
-                      shortcut={Keyboard.Shortcut.Common.Refresh}
-                      onAction={revalidate}
-                    />
+                    <ActionPanel.Section>
+                      <Action.Push title="Create Event…" icon={Icon.Plus} target={<EventForm />} />
+                      {event.id && (
+                        <ActionPanel.Submenu title="RSVP" icon={Icon.Checkmark}>
+                          <Action title="Accept" onAction={() => rsvp(event.id, event.title, "accept")} />
+                          <Action title="Maybe" onAction={() => rsvp(event.id, event.title, "maybe")} />
+                          <Action title="Decline" onAction={() => rsvp(event.id, event.title, "decline")} />
+                        </ActionPanel.Submenu>
+                      )}
+                    </ActionPanel.Section>
+                    <ActionPanel.Section>
+                      <Action.CopyToClipboard title="Copy Title" content={event.title} />
+                      {event.location && <Action.CopyToClipboard title="Copy Location" content={event.location} />}
+                      <Action
+                        title="Reload"
+                        icon={Icon.ArrowClockwise}
+                        shortcut={Keyboard.Shortcut.Common.Refresh}
+                        onAction={revalidate}
+                      />
+                    </ActionPanel.Section>
+                    {event.id && (
+                      <ActionPanel.Section>
+                        <Action
+                          title="Delete Event"
+                          icon={Icon.Trash}
+                          style={Action.Style.Destructive}
+                          shortcut={Keyboard.Shortcut.Common.Remove}
+                          onAction={() => removeEvent(event.id, event.title)}
+                        />
+                      </ActionPanel.Section>
+                    )}
                   </ActionPanel>
                 }
               />

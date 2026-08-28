@@ -1,7 +1,14 @@
 import { useEffect, useState } from "react";
-import { Action, ActionPanel, Icon, List, open } from "@raycast/api";
-import { useCachedPromise } from "@raycast/utils";
-import { parseContacts, runSpark, SparkCliError } from "./lib/spark";
+import { Action, ActionPanel, Alert, Icon, List, confirmAlert, open, showToast, Toast } from "@raycast/api";
+import { showFailureToast, useCachedPromise } from "@raycast/utils";
+import {
+  ContactActionName,
+  describeSparkError,
+  parseContacts,
+  runContactAction,
+  runSpark,
+  SparkCliError,
+} from "./lib/spark";
 
 const SPARK_APP_PATH = "/Applications/Spark Desktop.app";
 
@@ -23,6 +30,37 @@ export default function Contacts() {
     [debouncedText],
     { keepPreviousData: true },
   );
+
+  async function performContactAction(
+    action: ContactActionName,
+    email: string,
+    titles: { progress: string; success: string; failureFallback: string },
+  ) {
+    const toast = await showToast({ style: Toast.Style.Animated, title: titles.progress });
+    try {
+      await runContactAction(action, email);
+      toast.style = Toast.Style.Success;
+      toast.title = titles.success;
+    } catch (err) {
+      toast.hide();
+      await showFailureToast(err, { title: describeSparkError(err, titles.failureFallback) });
+    }
+  }
+
+  async function blockContact(email: string) {
+    const confirmed = await confirmAlert({
+      icon: Icon.XMarkCircle,
+      title: "Block Contact?",
+      message: `Emails from "${email}" will be blocked in Spark.`,
+      primaryAction: { title: "Block", style: Alert.ActionStyle.Destructive },
+    });
+    if (!confirmed) return;
+    await performContactAction("blockContact", email, {
+      progress: "Blocking…",
+      success: "Blocked",
+      failureFallback: `Couldn't block "${email}"`,
+    });
+  }
 
   if (error) {
     const isNotInstalled = error instanceof SparkCliError && error.kind === "not-installed";
@@ -58,8 +96,51 @@ export default function Contacts() {
             subtitle={contact.name ? contact.email : undefined}
             actions={
               <ActionPanel>
-                <Action.CopyToClipboard title="Copy Email" content={contact.email} />
-                {contact.name && <Action.CopyToClipboard title="Copy Name" content={contact.name} />}
+                <ActionPanel.Section>
+                  <Action.CopyToClipboard title="Copy Email" content={contact.email} />
+                  {contact.name && <Action.CopyToClipboard title="Copy Name" content={contact.name} />}
+                </ActionPanel.Section>
+                <ActionPanel.Section title="Manage">
+                  <Action
+                    title="Mark as Important"
+                    icon={Icon.Star}
+                    onAction={() =>
+                      performContactAction("markContactAsImportant", contact.email, {
+                        progress: "Updating…",
+                        success: "Marked as important",
+                        failureFallback: `Couldn't update "${contact.email}"`,
+                      })
+                    }
+                  />
+                  <Action
+                    title="Mark as Primary"
+                    icon={Icon.PersonCircle}
+                    onAction={() =>
+                      performContactAction("markContactAsPrimary", contact.email, {
+                        progress: "Updating…",
+                        success: "Marked as primary",
+                        failureFallback: `Couldn't update "${contact.email}"`,
+                      })
+                    }
+                  />
+                  <Action
+                    title="Accept / Unblock"
+                    icon={Icon.CheckCircle}
+                    onAction={() =>
+                      performContactAction("acceptContact", contact.email, {
+                        progress: "Updating…",
+                        success: "Accepted",
+                        failureFallback: `Couldn't accept "${contact.email}"`,
+                      })
+                    }
+                  />
+                  <Action
+                    title="Block Contact"
+                    icon={Icon.XMarkCircle}
+                    style={Action.Style.Destructive}
+                    onAction={() => blockContact(contact.email)}
+                  />
+                </ActionPanel.Section>
               </ActionPanel>
             }
           />

@@ -13,13 +13,29 @@ const EXEC_TIMEOUT_MS = 30_000;
 const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 
 export class SparkCliError extends Error {
-  kind: "not-installed" | "cli-error";
+  kind: "not-installed" | "access-denied" | "cli-error";
+  requiredAccess?: "triage" | "send";
 
-  constructor(message: string, kind: "not-installed" | "cli-error" = "cli-error") {
+  constructor(message: string, kind: SparkCliError["kind"] = "cli-error", requiredAccess?: "triage" | "send") {
     super(message);
     this.name = "SparkCliError";
     this.kind = kind;
+    this.requiredAccess = requiredAccess;
   }
+}
+
+/**
+ * A short, consistent title for mutating-action error toasts. Spark's CLI already
+ * reports exactly which access tier is missing (e.g. "account does not have triage
+ * access") — surfacing that as the toast title itself, instead of a generic
+ * "Couldn't archive/delete/..." per action, tells the user in one glance that this
+ * is a plan limitation rather than a bug.
+ */
+export function describeSparkError(err: unknown, fallbackTitle: string): string {
+  if (err instanceof SparkCliError && err.kind === "access-denied") {
+    return `Requires Spark Pro (${err.requiredAccess} access) — enable it in Spark Desktop → Settings → AI Agents`;
+  }
+  return fallbackTitle;
 }
 
 function getSparkPath(): string {
@@ -46,7 +62,12 @@ export async function runSpark(args: string[]): Promise<string> {
         "not-installed",
       );
     }
-    throw new SparkCliError(e.stderr?.trim() || e.message);
+    const message = e.stderr?.trim() || e.message;
+    const accessMatch = message.match(/(?:does not have|no accounts? have) (triage|send) access/i);
+    if (accessMatch) {
+      throw new SparkCliError(message, "access-denied", accessMatch[1].toLowerCase() as "triage" | "send");
+    }
+    throw new SparkCliError(message);
   }
 }
 
@@ -116,9 +137,71 @@ export function extractField(output: string, key: string): string | undefined {
   return match ? match[1].trim() : undefined;
 }
 
-/** Moves a message to Trash (Spark's `action moveToTrash`) — reversible from the Trash folder. */
-export async function moveEmailToTrash(messageId: string): Promise<void> {
-  await runSpark(["action", "moveToTrash", messageId]);
+export type SparkActionName =
+  | "pin"
+  | "unpin"
+  | "mute"
+  | "unmute"
+  | "snooze"
+  | "unsnooze"
+  | "archive"
+  | "moveToInbox"
+  | "moveToTrash"
+  | "moveToFolder"
+  | "attachLabel"
+  | "detachLabel"
+  | "markAsDone"
+  | "markAsUndone"
+  | "markAsSeen"
+  | "markAsUnseen"
+  | "markAsSpam"
+  | "unsubscribe"
+  | "changeCategoryPersonal"
+  | "changeCategoryNotification"
+  | "changeCategoryNewsletters"
+  | "send"
+  | "unschedule";
+
+interface SparkActionOptions {
+  date?: Date;
+  folder?: string;
+}
+
+/** Runs `spark action <name> <id...>` — the shared entry point for every message triage action. */
+export async function runSparkAction(
+  action: SparkActionName,
+  messageIds: string | string[],
+  options?: SparkActionOptions,
+): Promise<void> {
+  const ids = Array.isArray(messageIds) ? messageIds : [messageIds];
+  const args = ["action", action, ...ids];
+  if (options?.date) args.push("--date", options.date.toISOString().slice(0, 16));
+  if (options?.folder) args.push("--folder", options.folder);
+  await runSpark(args);
+}
+
+// ---------------------------------------------------------------------------
+// Accounts
+// ---------------------------------------------------------------------------
+
+export interface AccountInfo {
+  email: string;
+  alias: string;
+  access: string;
+}
+
+/** Parses the `Email Account: <email> "<alias>" (Access: <level>)` header lines from `spark accounts`. */
+export function parseAccounts(output: string): AccountInfo[] {
+  const accounts: AccountInfo[] = [];
+  const re = /^Email Account:\s*(\S+)\s+"([^"]*)"\s+\(Access:\s*([^)]+)\)/gm;
+  for (const match of output.matchAll(re)) {
+    accounts.push({ email: match[1], alias: match[2], access: match[3].trim() });
+  }
+  return accounts;
+}
+
+export async function getAccounts(): Promise<AccountInfo[]> {
+  return parseAccounts(await runSpark(["accounts"]));
 }
 
 // ---------------------------------------------------------------------------
@@ -479,7 +562,77 @@ export async function getUnreadSummary(limit = 10): Promise<UnreadSummary> {
   return { count: total ? Number(total) : emails.length, emails };
 }
 
-/** Snoozes a message until the given date (Spark's `action snooze`) — requires triage access. */
-export async function snoozeEmail(messageId: string, date: Date): Promise<void> {
-  await runSpark(["action", "snooze", messageId, "--date", date.toISOString().slice(0, 16)]);
+// ---------------------------------------------------------------------------
+// Contact actions
+// ---------------------------------------------------------------------------
+
+export type ContactActionName =
+  | "acceptContact"
+  | "blockContact"
+  | "acceptDomain"
+  | "blockDomain"
+  | "markContactAsImportant"
+  | "unmarkContactAsImportant"
+  | "markContactAsPrimary"
+  | "unmarkContactAsPrimary"
+  | "changeCategoryPersonal"
+  | "changeCategoryNotification"
+  | "changeCategoryNewsletters";
+
+/** Runs `spark contact-action <name> <email...>` — requires triage access. */
+export async function runContactAction(action: ContactActionName, emails: string | string[]): Promise<void> {
+  const list = Array.isArray(emails) ? emails : [emails];
+  await runSpark(["contact-action", action, ...list]);
+}
+
+// ---------------------------------------------------------------------------
+// Team comments
+// ---------------------------------------------------------------------------
+
+/** Posts a team chat comment on a thread — auto-shares the thread with the team if it isn't already shared. Requires triage access. */
+export async function postComment(messageId: string, body: string, team?: string): Promise<void> {
+  const args = ["comment", messageId, "--body", body];
+  if (team) args.push("--team", team);
+  await runSpark(args);
+}
+
+// ---------------------------------------------------------------------------
+// Calendar event mutation
+// ---------------------------------------------------------------------------
+
+export interface EventFormFields {
+  title: string;
+  start: Date;
+  end?: Date;
+  allDay?: boolean;
+  location?: string;
+  description?: string;
+  calendar?: string;
+  attendees?: string[];
+}
+
+function isoOrDate(date: Date, allDay?: boolean): string {
+  return allDay ? date.toISOString().slice(0, 10) : date.toISOString().slice(0, 16);
+}
+
+/** Creates a calendar event — requires send access (inviting attendees emits iTIP mail). */
+export async function createEvent(fields: EventFormFields): Promise<string> {
+  const args = ["event", "create", "--title", fields.title, "--start", isoOrDate(fields.start, fields.allDay)];
+  if (fields.end) args.push("--end", isoOrDate(fields.end, fields.allDay));
+  if (fields.allDay) args.push("--all-day");
+  if (fields.location) args.push("--location", fields.location);
+  if (fields.description) args.push("--description", fields.description);
+  if (fields.calendar) args.push("--calendar", fields.calendar);
+  if (fields.attendees?.length) args.push("--add", fields.attendees.join(","));
+  return runSpark(args);
+}
+
+/** RSVPs to a calendar event or invitation email — requires send access. */
+export async function rsvpEvent(eventId: string, status: "accept" | "decline" | "maybe"): Promise<void> {
+  await runSpark(["event", "rsvp", eventId, status]);
+}
+
+/** Deletes a calendar event — requires send access. */
+export async function deleteEvent(eventId: string): Promise<void> {
+  await runSpark(["event", "delete", eventId]);
 }
