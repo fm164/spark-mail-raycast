@@ -24,6 +24,62 @@
       "subtitle": "Spark Mail",
       "description": "Draft a new email and open it in Spark",
       "mode": "view"
+    },
+    {
+      "name": "folders",
+      "title": "Browse Folders",
+      "subtitle": "Spark Mail",
+      "description": "Browse folders and labels across all Spark accounts",
+      "mode": "view"
+    },
+    {
+      "name": "search",
+      "title": "Search Mail",
+      "subtitle": "Spark Mail",
+      "description": "Search emails by topic across all folders, or browse recent mail",
+      "mode": "view"
+    },
+    {
+      "name": "contacts",
+      "title": "Search Contacts",
+      "subtitle": "Spark Mail",
+      "description": "Search Spark contacts by name or email",
+      "mode": "view"
+    },
+    {
+      "name": "events",
+      "title": "Calendar Events",
+      "subtitle": "Spark Mail",
+      "description": "Browse upcoming calendar events",
+      "mode": "view"
+    },
+    {
+      "name": "availability",
+      "title": "Find Availability",
+      "subtitle": "Spark Mail",
+      "description": "Find free time slots for yourself or with attendees",
+      "mode": "view"
+    },
+    {
+      "name": "templates",
+      "title": "Browse Templates",
+      "subtitle": "Spark Mail",
+      "description": "List saved Spark message templates",
+      "mode": "view"
+    },
+    {
+      "name": "team",
+      "title": "Team Info",
+      "subtitle": "Spark Mail",
+      "description": "Show Spark team metadata, members, and assignments",
+      "mode": "view"
+    },
+    {
+      "name": "meetings",
+      "title": "Meeting Notes",
+      "subtitle": "Spark Mail",
+      "description": "List Spark meeting transcripts",
+      "mode": "view"
     }
   ],
   "preferences": [

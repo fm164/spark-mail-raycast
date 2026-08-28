@@ -1,4 +1,5 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { createWriteStream } from "node:fs";
 import { promisify } from "node:util";
 import { getPreferenceValues } from "@raycast/api";
 
@@ -115,16 +116,348 @@ export function extractField(output: string, key: string): string | undefined {
   return match ? match[1].trim() : undefined;
 }
 
-export async function getSparkDeepLink(messageId: string): Promise<string> {
-  const output = await runSpark(["thread", messageId]);
-  const link = extractField(output, "Link");
-  if (!link) {
-    throw new SparkCliError(`Could not find a Spark deep link for message ${messageId}.`);
-  }
-  return link;
-}
-
 /** Moves a message to Trash (Spark's `action moveToTrash`) — reversible from the Trash folder. */
 export async function moveEmailToTrash(messageId: string): Promise<void> {
   await runSpark(["action", "moveToTrash", messageId]);
+}
+
+// ---------------------------------------------------------------------------
+// Folders
+// ---------------------------------------------------------------------------
+
+export interface FolderEntry {
+  name: string;
+  count: number;
+  id: string;
+}
+
+export interface FolderGroup {
+  label: string;
+  folders: FolderEntry[];
+}
+
+/**
+ * `spark folders` prints one blank-line-separated group per account (plus a
+ * leading "Unified" group), each line formatted as
+ * `  <name>  <count> messages  (<qualified id>)`.
+ */
+export function parseFolders(output: string): FolderGroup[] {
+  const rowRe = /^\s*(.+?)\s{2,}(\d+)\s+messages\s+\(([^)]+)\)\s*$/;
+  const groups: FolderGroup[] = [];
+
+  for (const block of output.split(/\n\s*\n/)) {
+    const lines = block.split("\n").filter((l) => l.trim().length > 0);
+    if (lines.length === 0) continue;
+
+    const label = lines[0].trim();
+    const folders: FolderEntry[] = [];
+    for (const line of lines.slice(1)) {
+      const match = line.match(rowRe);
+      if (match) {
+        folders.push({ name: match[1].trim(), count: Number(match[2]), id: match[3].trim() });
+      }
+    }
+    if (folders.length > 0) groups.push({ label, folders });
+  }
+
+  return groups;
+}
+
+// ---------------------------------------------------------------------------
+// Contacts
+// ---------------------------------------------------------------------------
+
+export interface ContactEntry {
+  name: string;
+  email: string;
+}
+
+export interface ContactsResult {
+  contacts: ContactEntry[];
+  summary: string;
+  empty: boolean;
+}
+
+export function parseContacts(output: string): ContactsResult {
+  const lines = output.split("\n");
+  const headerIndex = lines.findIndex((line) => /^\s*Name\s+Email\s*$/.test(line));
+  const summary = lines.find((line) => /contacts? found/.test(line))?.trim() ?? "";
+
+  if (headerIndex === -1) {
+    return { contacts: [], summary, empty: true };
+  }
+
+  const header = lines[headerIndex];
+  const emailStart = header.indexOf("Email");
+
+  const contacts: ContactEntry[] = [];
+  for (let i = headerIndex + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === "") break;
+    contacts.push({
+      name: line.slice(0, emailStart).trim(),
+      email: line.slice(emailStart).trim(),
+    });
+  }
+
+  return { contacts, summary, empty: contacts.length === 0 };
+}
+
+// ---------------------------------------------------------------------------
+// Threads & search (share the same per-message block format)
+// ---------------------------------------------------------------------------
+
+export interface MessageAttachment {
+  id: string;
+  name: string;
+  size: string;
+  mimeType: string;
+  path: string;
+}
+
+export interface MessageBlock {
+  id: string;
+  subject: string;
+  from: string;
+  to?: string;
+  cc?: string;
+  bcc?: string;
+  date: string;
+  flags?: string;
+  body: string;
+  attachments: MessageAttachment[];
+}
+
+/**
+ * Both `spark thread <id>` and `spark search "<topic>"` print one or more
+ * messages in the same shape: a contiguous `Key: value` header block (ID,
+ * Subject, From, To, CC, BCC, Date, Type, Flags), a blank line, the
+ * plain-text body, and an optional `Attachments:` table. Message boundaries
+ * are found via the `ID:` line rather than the surrounding dashed rules,
+ * since dash-rule presence/placement isn't documented as stable.
+ */
+function parseMessageBlocks(output: string): MessageBlock[] {
+  const lines = output.split("\n");
+  const idLineIndices: number[] = [];
+  lines.forEach((line, i) => {
+    if (/^\s*ID:\s*\S+\s*$/.test(line)) idLineIndices.push(i);
+  });
+
+  const messages: MessageBlock[] = [];
+  for (let m = 0; m < idLineIndices.length; m++) {
+    const start = idLineIndices[m];
+    const end = m + 1 < idLineIndices.length ? idLineIndices[m + 1] : lines.length;
+    const segLines = lines.slice(start, end);
+
+    let blankIndex = segLines.findIndex((l) => l.trim() === "");
+    if (blankIndex === -1) blankIndex = segLines.length;
+    const header = segLines.slice(0, blankIndex).join("\n");
+
+    const attachHeaderIndex = segLines.findIndex((l) => /^\s*Attachments:\s*$/.test(l));
+    const bodyEnd = attachHeaderIndex === -1 ? segLines.length : attachHeaderIndex;
+    const body = segLines
+      .slice(blankIndex + 1, bodyEnd)
+      .join("\n")
+      .trim();
+
+    const attachments: MessageAttachment[] = [];
+    if (attachHeaderIndex !== -1) {
+      const attachHeader = segLines[attachHeaderIndex + 1] ?? "";
+      const cols = ["ID", "Name", "Size", "MIME Type", "Path"];
+      const starts = cols.map((c) => attachHeader.indexOf(c));
+      if (starts.every((s) => s !== -1)) {
+        for (let r = attachHeaderIndex + 2; r < segLines.length; r++) {
+          const row = segLines[r];
+          if (row.trim() === "") continue;
+          const slice = (from: number, to: number | undefined) => row.slice(from, to).trim();
+          attachments.push({
+            id: slice(starts[0], starts[1]),
+            name: slice(starts[1], starts[2]),
+            size: slice(starts[2], starts[3]),
+            mimeType: slice(starts[3], starts[4]),
+            path: slice(starts[4], undefined),
+          });
+        }
+      }
+    }
+
+    messages.push({
+      id: extractField(header, "ID") ?? "",
+      subject: extractField(header, "Subject") ?? "",
+      from: extractField(header, "From") ?? "",
+      to: extractField(header, "To"),
+      cc: extractField(header, "CC"),
+      bcc: extractField(header, "BCC"),
+      date: extractField(header, "Date") ?? "",
+      flags: extractField(header, "Flags"),
+      body,
+      attachments,
+    });
+  }
+
+  return messages;
+}
+
+export interface ThreadResult {
+  subject: string;
+  link: string;
+  messages: MessageBlock[];
+}
+
+export function parseThread(output: string): ThreadResult {
+  return {
+    subject: extractField(output, "Thread") ?? "",
+    link: extractField(output, "Link") ?? "",
+    messages: parseMessageBlocks(output),
+  };
+}
+
+export async function getThread(messageId: string): Promise<ThreadResult> {
+  const output = await runSpark(["thread", messageId]);
+  return parseThread(output);
+}
+
+export async function getSparkDeepLink(messageId: string): Promise<string> {
+  const thread = await getThread(messageId);
+  if (!thread.link) {
+    throw new SparkCliError(`Could not find a Spark deep link for message ${messageId}.`);
+  }
+  return thread.link;
+}
+
+export interface SearchTopicResult {
+  summary: string;
+  results: MessageBlock[];
+  empty: boolean;
+}
+
+export async function searchTopic(topic: string, scope?: string): Promise<SearchTopicResult> {
+  const args = ["search", topic];
+  if (scope) args.push("--in", scope);
+  const output = await runSpark(args);
+  const summary = output.match(/^\d+ result\(s\).*$/m)?.[0].trim() ?? "";
+  const results = parseMessageBlocks(output);
+  return { summary, results, empty: results.length === 0 };
+}
+
+export async function searchList(filter?: string, scope?: string): Promise<EmailListResult> {
+  const args = ["search"];
+  if (filter) args.push("--filter", filter);
+  if (scope) args.push("--in", scope);
+  const output = await runSpark(args);
+  return parseEmailsTable(output);
+}
+
+// ---------------------------------------------------------------------------
+// Calendar events
+// ---------------------------------------------------------------------------
+
+export interface CalendarEvent {
+  title: string;
+  id: string;
+  time: string;
+  calendar?: string;
+  location?: string;
+}
+
+export interface EventDay {
+  heading: string;
+  events: CalendarEvent[];
+}
+
+export interface EventsResult {
+  header: string;
+  days: EventDay[];
+  empty: boolean;
+}
+
+function parseEventBlock(block: string): CalendarEvent {
+  const lines = block
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  const title = lines[0] ?? "";
+  const idIndex = lines.findIndex((l) => /^ID:/.test(l));
+  const id = idIndex !== -1 ? lines[idIndex].replace(/^ID:\s*/, "") : "";
+  const nextLine = idIndex !== -1 ? lines[idIndex + 1] : undefined;
+  const time = nextLine && !/^(Calendar|Location|Attendees):/.test(nextLine) ? nextLine : "";
+
+  return {
+    title,
+    id,
+    time,
+    calendar: extractField(block, "Calendar"),
+    location: extractField(block, "Location"),
+  };
+}
+
+export function parseEvents(output: string): EventsResult {
+  const header = output.split("\n")[0]?.trim() ?? "";
+  const dayHeadingRe = /^──+\s*(.+?)\s*──+\s*$/;
+
+  const lines = output.split("\n");
+  const dayStarts: { index: number; heading: string }[] = [];
+  lines.forEach((line, i) => {
+    const match = line.match(dayHeadingRe);
+    if (match) dayStarts.push({ index: i, heading: match[1].trim() });
+  });
+
+  const days: EventDay[] = dayStarts.map((day, i) => {
+    const end = i + 1 < dayStarts.length ? dayStarts[i + 1].index : lines.length;
+    const section = lines.slice(day.index + 1, end).join("\n");
+    const events = section
+      .split(/\n\s*\n/)
+      .filter((block) => !/^\d+\s+event\(s\)\s*$/.test(block.trim()))
+      .filter((block) => block.trim().length > 0)
+      .map(parseEventBlock);
+    return { heading: day.heading, events };
+  });
+
+  return { header, days, empty: days.every((d) => d.events.length === 0) };
+}
+
+export async function getEvents(range: "today" | "tomorrow" | "week", scope?: string): Promise<EventsResult> {
+  const args = ["events", `--${range}`];
+  if (scope) args.push("--in", scope);
+  const output = await runSpark(args);
+  return parseEvents(output);
+}
+
+// ---------------------------------------------------------------------------
+// Attachments
+// ---------------------------------------------------------------------------
+
+export interface AttachmentMetadata {
+  id: string;
+  name: string;
+  size: string;
+  mimeType: string;
+}
+
+export async function getAttachmentMetadata(attachmentId: string): Promise<AttachmentMetadata> {
+  const output = await runSpark(["attachment", attachmentId]);
+  return {
+    id: extractField(output, "ID") ?? attachmentId,
+    name: extractField(output, "Name") ?? `attachment-${attachmentId}`,
+    size: extractField(output, "Size") ?? "",
+    mimeType: extractField(output, "MIME Type") ?? "",
+  };
+}
+
+/** Streams the raw attachment bytes straight to disk (bypasses execFile's buffered stdout/maxBuffer cap). */
+export async function saveAttachment(attachmentId: string, destPath: string): Promise<void> {
+  const sparkPath = getSparkPath();
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(sparkPath, ["attachment", attachmentId, "--stream"]);
+    const out = createWriteStream(destPath);
+    let stderr = "";
+    child.stderr.on("data", (chunk) => (stderr += chunk.toString()));
+    child.on("error", (err) => reject(new SparkCliError(err.message)));
+    child.stdout.pipe(out);
+    out.on("error", (err) => reject(new SparkCliError(err.message)));
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new SparkCliError(stderr.trim() || `spark attachment exited with code ${code}`));
+    });
+  });
 }
