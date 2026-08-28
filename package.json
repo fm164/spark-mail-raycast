@@ -1,0 +1,59 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "spark-mail",
+  "title": "Spark Mail",
+  "description": "Browse your Spark inbox and compose new emails without leaving Raycast.",
+  "icon": "icon.png",
+  "author": "fabien",
+  "categories": [
+    "Productivity",
+    "Communication"
+  ],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "list-inbox",
+      "title": "List Inbox",
+      "subtitle": "Spark Mail",
+      "description": "Browse the emails in your Spark inbox and open one in Spark",
+      "mode": "view"
+    },
+    {
+      "name": "compose",
+      "title": "Compose New Email",
+      "subtitle": "Spark Mail",
+      "description": "Draft a new email and open it in Spark",
+      "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "sparkPath",
+      "type": "textfield",
+      "required": false,
+      "title": "Spark CLI Path",
+      "description": "Path to the Spark CLI binary (Spark Desktop → Settings → AI Agents → Spark CLI Setup)",
+      "default": "/usr/local/bin/spark",
+      "placeholder": "/usr/local/bin/spark"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^2.1.1",
+    "@raycast/utils": "^2.3.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^2.2.0",
+    "@types/node": "20.8.10",
+    "@types/react": "^19.0.10",
+    "eslint": "^8.57.0",
+    "prettier": "^3.3.3",
+    "typescript": "^5.4.5"
+  },
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}
