@@ -37,7 +37,15 @@
       "title": "Search Mail",
       "subtitle": "Spark Mail",
       "description": "Search emails by topic across all folders, or browse recent mail",
-      "mode": "view"
+      "mode": "view",
+      "arguments": [
+        {
+          "name": "query",
+          "type": "text",
+          "placeholder": "Topic (optional)",
+          "required": false
+        }
+      ]
     },
     {
       "name": "contacts",
@@ -80,6 +88,22 @@
       "subtitle": "Spark Mail",
       "description": "List Spark meeting transcripts",
       "mode": "view"
+    },
+    {
+      "name": "menu-bar",
+      "title": "Spark Menu Bar",
+      "subtitle": "Spark Mail",
+      "description": "Shows unread inbox count in the menu bar, with quick access to recent unread emails",
+      "mode": "menu-bar",
+      "interval": "5m"
+    },
+    {
+      "name": "unread-count",
+      "title": "Refresh Unread Count",
+      "subtitle": "Spark Mail",
+      "description": "Keeps the unread count in this row's subtitle up to date in the background",
+      "mode": "no-view",
+      "interval": "5m"
     }
   ],
   "preferences": [

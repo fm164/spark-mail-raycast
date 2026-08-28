@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Action, ActionPanel, Icon, List, open } from "@raycast/api";
-import { usePromise } from "@raycast/utils";
+import { useCachedPromise } from "@raycast/utils";
 import { parseContacts, runSpark, SparkCliError } from "./lib/spark";
 
 const SPARK_APP_PATH = "/Applications/Spark Desktop.app";
@@ -14,13 +14,14 @@ export default function Contacts() {
     return () => clearTimeout(timer);
   }, [text]);
 
-  const { data, isLoading, error, revalidate } = usePromise(
+  const { data, isLoading, error, revalidate } = useCachedPromise(
     async (query: string) => {
       if (!query.trim()) return null;
       const output = await runSpark(["contacts", query.trim()]);
       return parseContacts(output);
     },
     [debouncedText],
+    { keepPreviousData: true },
   );
 
   if (error) {

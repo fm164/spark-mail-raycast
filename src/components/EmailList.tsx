@@ -14,7 +14,7 @@ import {
   Toast,
   Keyboard,
 } from "@raycast/api";
-import { showFailureToast, usePromise } from "@raycast/utils";
+import { showFailureToast, useCachedPromise } from "@raycast/utils";
 import {
   displayNameFromAddress,
   getSparkDeepLink,
@@ -24,6 +24,7 @@ import {
   runSpark,
   saveAttachment,
   getAttachmentMetadata,
+  snoozeEmail,
   SparkCliError,
   ThreadResult,
 } from "../lib/spark";
@@ -40,12 +41,13 @@ type ThreadCacheEntry =
   { status: "loading" } | { status: "error"; error: unknown } | { status: "done"; thread: ThreadResult };
 
 export function EmailList({ folder, navigationTitle, searchBarPlaceholder }: EmailListProps) {
-  const { data, isLoading, error, revalidate } = usePromise(
+  const { data, isLoading, error, revalidate } = useCachedPromise(
     async (f: string) => {
       const output = await runSpark(["emails", f, "--page-size", "50"]);
       return parseEmailsTable(output);
     },
     [folder],
+    { keepPreviousData: true },
   );
 
   const [isShowingDetail, setIsShowingDetail] = useState(false);
@@ -99,6 +101,19 @@ export function EmailList({ folder, navigationTitle, searchBarPlaceholder }: Ema
     } catch (err) {
       toast.hide();
       await showFailureToast(err, { title: `Couldn't delete "${subject}"` });
+    }
+  }
+
+  async function snoozeUntil(id: string, subject: string, date: Date) {
+    const toast = await showToast({ style: Toast.Style.Animated, title: "Snoozing…" });
+    try {
+      await snoozeEmail(id, date);
+      toast.style = Toast.Style.Success;
+      toast.title = "Snoozed";
+      revalidate();
+    } catch (err) {
+      toast.hide();
+      await showFailureToast(err, { title: `Couldn't snooze "${subject}"` });
     }
   }
 
@@ -223,6 +238,12 @@ export function EmailList({ folder, navigationTitle, searchBarPlaceholder }: Ema
                     title="Copy Sender Email"
                     content={email.from}
                     shortcut={Keyboard.Shortcut.Common.Copy}
+                  />
+                  <Action.PickDate
+                    title="Snooze Until…"
+                    icon={Icon.Clock}
+                    min={new Date()}
+                    onChange={(date) => date && snoozeUntil(email.id, email.subject, date)}
                   />
                   <Action
                     title="Reload"

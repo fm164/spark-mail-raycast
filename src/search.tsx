@@ -1,18 +1,18 @@
 import { useEffect, useState } from "react";
-import { Action, ActionPanel, Icon, List, open, closeMainWindow, showToast, Toast } from "@raycast/api";
-import { showFailureToast, usePromise } from "@raycast/utils";
+import { Action, ActionPanel, Icon, LaunchProps, List, open, closeMainWindow, showToast, Toast } from "@raycast/api";
+import { createDeeplink, DeeplinkType, showFailureToast, useCachedPromise } from "@raycast/utils";
 import { displayNameFromAddress, getSparkDeepLink, searchList, searchTopic, SparkCliError } from "./lib/spark";
 
-export default function Search() {
-  const [text, setText] = useState("");
-  const [debouncedText, setDebouncedText] = useState("");
+export default function Search(props: LaunchProps<{ arguments: Arguments.Search }>) {
+  const [text, setText] = useState(props.arguments.query ?? "");
+  const [debouncedText, setDebouncedText] = useState(text);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedText(text), 300);
     return () => clearTimeout(timer);
   }, [text]);
 
-  const { data, isLoading, error, revalidate } = usePromise(
+  const { data, isLoading, error, revalidate } = useCachedPromise(
     async (query: string) => {
       if (query.trim()) {
         return { mode: "topic" as const, result: await searchTopic(query.trim()) };
@@ -20,7 +20,13 @@ export default function Search() {
       return { mode: "list" as const, result: await searchList() };
     },
     [debouncedText],
+    { keepPreviousData: true },
   );
+
+  const quicklink = {
+    name: text.trim() ? `Spark Search: ${text.trim()}` : "Spark: Browse Recent Mail",
+    link: createDeeplink({ type: DeeplinkType.Extension, command: "search", arguments: { query: text.trim() } }),
+  };
 
   async function openInSpark(id: string, subject: string) {
     const toast = await showToast({ style: Toast.Style.Animated, title: "Opening in Spark…" });
@@ -56,6 +62,7 @@ export default function Search() {
   return (
     <List
       isLoading={isLoading}
+      searchText={text}
       onSearchTextChange={setText}
       searchBarPlaceholder="Search mail by topic, or leave empty to browse recent across all folders…"
       isShowingDetail={data?.mode === "topic"}
@@ -79,6 +86,7 @@ export default function Search() {
                     onAction={() => openInSpark(email.id, email.subject)}
                   />
                   <Action.CopyToClipboard title="Copy Subject" content={email.subject} />
+                  <Action.CreateQuicklink quicklink={quicklink} />
                 </ActionPanel>
               }
             />
@@ -115,6 +123,7 @@ export default function Search() {
                       onAction={() => openInSpark(message.id, message.subject)}
                     />
                     <Action.CopyToClipboard title="Copy Subject" content={message.subject} />
+                    <Action.CreateQuicklink quicklink={quicklink} />
                   </ActionPanel>
                 }
               />

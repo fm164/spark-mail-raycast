@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Action, ActionPanel, Icon, Keyboard, List, open } from "@raycast/api";
-import { usePromise } from "@raycast/utils";
+import { useCachedPromise } from "@raycast/utils";
 import { getEvents, SparkCliError } from "./lib/spark";
 
 const SPARK_APP_PATH = "/Applications/Spark Desktop.app";
@@ -9,7 +9,7 @@ type Range = "today" | "tomorrow" | "week";
 
 export default function Events() {
   const [range, setRange] = useState<Range>("today");
-  const { data, isLoading, error, revalidate } = usePromise(async (r: Range) => getEvents(r), [range]);
+  const { data, isLoading, error, revalidate } = useCachedPromise(async (r: Range) => getEvents(r), [range]);
 
   if (error) {
     const isNotInstalled = error instanceof SparkCliError && error.kind === "not-installed";

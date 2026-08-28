@@ -1,5 +1,5 @@
 import { Action, ActionPanel, Detail, Icon, open } from "@raycast/api";
-import { usePromise } from "@raycast/utils";
+import { useCachedPromise } from "@raycast/utils";
 import { runSpark, SparkCliError } from "../lib/spark";
 
 const SPARK_APP_PATH = "/Applications/Spark Desktop.app";
@@ -11,7 +11,7 @@ interface RawCommandViewProps {
 
 /** Renders a spark CLI subcommand's plain-text output as-is — used for commands with no stable, testable table shape yet. */
 export function RawCommandView({ args, navigationTitle }: RawCommandViewProps) {
-  const { data, isLoading, error, revalidate } = usePromise(async () => runSpark(args), []);
+  const { data, isLoading, error, revalidate } = useCachedPromise(async () => runSpark(args), []);
 
   const isNotInstalled = error instanceof SparkCliError && error.kind === "not-installed";
   const markdown = error

@@ -461,3 +461,25 @@ export async function saveAttachment(attachmentId: string, destPath: string): Pr
     });
   });
 }
+
+// ---------------------------------------------------------------------------
+// Unread summary (menu bar + background refresh)
+// ---------------------------------------------------------------------------
+
+export interface UnreadSummary {
+  count: number;
+  emails: EmailListItem[];
+}
+
+/** Total is parsed from the `Page X of Y (Z total emails)` footer, not `emails.length`, since the list is capped by `limit`. */
+export async function getUnreadSummary(limit = 10): Promise<UnreadSummary> {
+  const output = await runSpark(["emails", "Inbox", "--filter", "is:unread", "--page-size", String(limit)]);
+  const { emails, summary } = parseEmailsTable(output);
+  const total = summary.match(/\((\d+) total emails?\)/)?.[1];
+  return { count: total ? Number(total) : emails.length, emails };
+}
+
+/** Snoozes a message until the given date (Spark's `action snooze`) — requires triage access. */
+export async function snoozeEmail(messageId: string, date: Date): Promise<void> {
+  await runSpark(["action", "snooze", messageId, "--date", date.toISOString().slice(0, 16)]);
+}

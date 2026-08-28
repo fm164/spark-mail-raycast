@@ -1,12 +1,12 @@
 import { Action, ActionPanel, Icon, Keyboard, List, open } from "@raycast/api";
-import { usePromise } from "@raycast/utils";
+import { useCachedPromise } from "@raycast/utils";
 import { EmailList } from "./components/EmailList";
 import { parseFolders, runSpark, SparkCliError } from "./lib/spark";
 
 const SPARK_APP_PATH = "/Applications/Spark Desktop.app";
 
 export default function Folders() {
-  const { data, isLoading, error, revalidate } = usePromise(async () => {
+  const { data, isLoading, error, revalidate } = useCachedPromise(async () => {
     const output = await runSpark(["folders"]);
     return parseFolders(output);
   }, []);
